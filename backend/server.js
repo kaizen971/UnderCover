@@ -136,34 +136,65 @@ io.on('connection', (socket) => {
             }]
           });
           await game.save();
+          socket.join(roomCode);
+          io.to(roomCode).emit('room_update', game);
+          socket.emit('join_success', { game, reconnected: false });
+          console.log(`Player ${playerName} created and joined room ${roomCode}`);
         } else {
           // Room doesn't exist and we shouldn't create it
           socket.emit('error', { message: 'Room not found. Please check the room code.' });
           return;
         }
       } else {
-        // Check if game has already started
-        if (game.status !== 'waiting') {
-          socket.emit('error', { message: 'Game has already started. Cannot join.' });
-          return;
+        // Check if player is reconnecting (based on userId)
+        let existingPlayer = null;
+        let isReconnection = false;
+
+        if (userId) {
+          existingPlayer = game.players.find(p => p.userId && p.userId.toString() === userId);
+          if (existingPlayer) {
+            // Player is reconnecting - update their socket ID
+            existingPlayer.id = socket.id;
+            isReconnection = true;
+            console.log(`Player ${playerName} (${userId}) reconnecting to room ${roomCode}`);
+          }
         }
 
-        const existingPlayer = game.players.find(p => p.id === socket.id);
+        // If not reconnecting, check if it's a new join
         if (!existingPlayer) {
-          game.players.push({
-            id: socket.id,
-            userId: userId || null,
-            name: playerName,
-            isAlive: true,
-            hasVoted: false
-          });
-          await game.save();
-        }
-      }
+          // Check if game has already started (only block new players)
+          if (game.status !== 'waiting') {
+            socket.emit('error', { message: 'Game has already started. Cannot join.' });
+            return;
+          }
 
-      socket.join(roomCode);
-      io.to(roomCode).emit('room_update', game);
-      console.log(`Player ${playerName} joined room ${roomCode}`);
+          // Check for duplicate by socket ID
+          existingPlayer = game.players.find(p => p.id === socket.id);
+          if (!existingPlayer) {
+            // Check if name is already taken (prevent duplicate names)
+            const nameTaken = game.players.find(p => p.name.toLowerCase() === playerName.toLowerCase());
+            if (nameTaken) {
+              socket.emit('error', { message: 'This name is already taken in the room. Please choose another name.' });
+              return;
+            }
+
+            // New player joining
+            game.players.push({
+              id: socket.id,
+              userId: userId || null,
+              name: playerName,
+              isAlive: true,
+              hasVoted: false
+            });
+            console.log(`Player ${playerName} joined room ${roomCode}`);
+          }
+        }
+
+        await game.save();
+        socket.join(roomCode);
+        io.to(roomCode).emit('room_update', game);
+        socket.emit('join_success', { game, reconnected: isReconnection });
+      }
     } catch (error) {
       console.error('Error joining room:', error);
       socket.emit('error', { message: 'Failed to join room' });
@@ -298,8 +329,37 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log('User disconnected:', socket.id);
+
+    try {
+      // Find all games where this socket was a player
+      const games = await Game.find({ 'players.id': socket.id });
+
+      for (const game of games) {
+        const player = game.players.find(p => p.id === socket.id);
+
+        if (player) {
+          // If game is still in waiting status and player is not authenticated, remove them
+          if (game.status === 'waiting' && !player.userId) {
+            game.players = game.players.filter(p => p.id !== socket.id);
+            await game.save();
+            io.to(game.roomCode).emit('room_update', game);
+            console.log(`Removed guest player ${player.name} from room ${game.roomCode}`);
+          } else {
+            // For authenticated players or active games, just notify others
+            io.to(game.roomCode).emit('player_disconnected', {
+              playerId: socket.id,
+              playerName: player.name,
+              canReconnect: !!player.userId
+            });
+            console.log(`Player ${player.name} disconnected from room ${game.roomCode} (can reconnect: ${!!player.userId})`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error handling disconnect:', error);
+    }
   });
 });
 

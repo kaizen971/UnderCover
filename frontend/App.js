@@ -66,7 +66,18 @@ export default function App() {
 
       socket.on('room_update', (updatedGame) => {
         setGame(updatedGame);
+        if (screen !== 'lobby' && screen !== 'game') {
+          setScreen('lobby');
+        }
+      });
+
+      socket.on('join_success', ({ game: joinedGame, reconnected }) => {
+        setGame(joinedGame);
+        setLoading(false);
         setScreen('lobby');
+        if (reconnected) {
+          Alert.alert('Reconnected', 'You have been reconnected to the game.');
+        }
       });
 
       socket.on('game_started', (updatedGame) => {
@@ -97,7 +108,16 @@ export default function App() {
       });
 
       socket.on('error', (error) => {
+        setLoading(false);
         Alert.alert('Error', error.message);
+      });
+
+      socket.on('player_disconnected', ({ playerName, canReconnect }) => {
+        if (canReconnect) {
+          Alert.alert('Player Disconnected', `${playerName} has disconnected but can reconnect.`);
+        } else {
+          Alert.alert('Player Left', `${playerName} has left the room.`);
+        }
       });
 
       return () => {
