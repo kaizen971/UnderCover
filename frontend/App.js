@@ -218,7 +218,7 @@ export default function App() {
       });
 
       if (response.ok) {
-        socket.emit('join_room', { roomCode, playerName, userId: user.id });
+        socket.emit('join_room', { roomCode, playerName, userId: user.id, createIfNotExists: true });
       } else {
         const data = await response.json();
         Alert.alert('Error', data.error || 'Failed to create room');
@@ -231,12 +231,38 @@ export default function App() {
     }
   };
 
-  const joinRoom = () => {
+  const joinRoom = async () => {
     if (!roomCode.trim()) {
       Alert.alert('Error', 'Please enter a room code');
       return;
     }
-    socket.emit('join_room', { roomCode, playerName, userId: user.id });
+
+    setLoading(true);
+    try {
+      // Check if room exists before joining
+      const response = await fetch(`${API_BASE_URL}/game/${roomCode}`);
+
+      if (response.ok) {
+        const gameData = await response.json();
+
+        // Check if game has already started
+        if (gameData.status !== 'waiting') {
+          Alert.alert('Error', 'This game has already started. You cannot join.');
+          setLoading(false);
+          return;
+        }
+
+        // Room exists and is waiting, join it
+        socket.emit('join_room', { roomCode, playerName, userId: user.id, createIfNotExists: false });
+      } else {
+        Alert.alert('Error', 'Room not found. Please check the room code.');
+      }
+    } catch (error) {
+      console.error('Join room error:', error);
+      Alert.alert('Error', 'Failed to join room. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const startGame = () => {

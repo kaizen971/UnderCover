@@ -118,23 +118,36 @@ const authenticateToken = (req, res, next) => {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('join_room', async ({ roomCode, playerName, userId }) => {
+  socket.on('join_room', async ({ roomCode, playerName, userId, createIfNotExists }) => {
     try {
       let game = await Game.findOne({ roomCode });
 
       if (!game) {
-        game = new Game({
-          roomCode,
-          players: [{
-            id: socket.id,
-            userId: userId || null,
-            name: playerName,
-            isAlive: true,
-            hasVoted: false
-          }]
-        });
-        await game.save();
+        // Only create if explicitly requested
+        if (createIfNotExists) {
+          game = new Game({
+            roomCode,
+            players: [{
+              id: socket.id,
+              userId: userId || null,
+              name: playerName,
+              isAlive: true,
+              hasVoted: false
+            }]
+          });
+          await game.save();
+        } else {
+          // Room doesn't exist and we shouldn't create it
+          socket.emit('error', { message: 'Room not found. Please check the room code.' });
+          return;
+        }
       } else {
+        // Check if game has already started
+        if (game.status !== 'waiting') {
+          socket.emit('error', { message: 'Game has already started. Cannot join.' });
+          return;
+        }
+
         const existingPlayer = game.players.find(p => p.id === socket.id);
         if (!existingPlayer) {
           game.players.push({
